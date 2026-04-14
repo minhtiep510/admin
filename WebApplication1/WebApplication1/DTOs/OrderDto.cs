@@ -1,0 +1,17 @@
+namespace WebApplication1.DTOs
+{
+    public class OrderDto
+    {        
+         public int Id { get; set; }
+
+        public string CustomerName { get; set; }
+        public string Phone { get; set; }
+
+        public DateTime OrderDate { get; set; }
+        public decimal TotalAmount { get; set; }
+
+        public string Status { get; set; }
+
+        public List<OrderDetailDto> Items { get; set; }
+    }
+}
