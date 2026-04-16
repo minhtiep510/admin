@@ -16,7 +16,13 @@ namespace WebApplication1.Controllers
         {
             _context = context;
         }
-
+     // Đường dẫn gọi API: GET /api/product/total-stock
+    [HttpGet("total-stock")]
+    public async Task<IActionResult> GetTotalStock()
+    {
+        var totalStock = await _context.ProductVariants.SumAsync(v => v.StockQuantity);
+        return Ok(new { totalStock });
+    }
         // =========================================
         // 1. GET ALL (Danh sách sản phẩm)
         // =========================================
@@ -31,6 +37,7 @@ namespace WebApplication1.Controllers
                 {
                     Id = p.Id,
                     Name = p.Name,
+                    CategoryId = p.CategoryId,
                     CategoryName = p.Category.Name,
 
                     StartingPrice = p.ProductVariants
@@ -66,34 +73,36 @@ namespace WebApplication1.Controllers
             if (product == null)
                 return NotFound();
 
-            var result = new ProductDetailDto
+            var result = new 
             {
-                Id = product.Id,
-                Name = product.Name,
-                Description = product.Description,
-                CategoryName = product.Category.Name,
+                id = product.Id,
+                name = product.Name,
+                description = product.Description,
+                categoryId = product.CategoryId, // Trả về thêm ID danh mục để App chọn sẵn
+                categoryName = product.Category?.Name,
 
-                Variants = product.ProductVariants.Select(v => new ProductVariantDto
+                variants = product.ProductVariants.Select(v => new 
                 {
-                    Id = v.Id,
-                    SKU = v.SKU,
-                    Price = v.Price,
-                    StockQuantity = v.StockQuantity,
-                    Color = v.Color,
-                    Capacity = v.Capacity,
+                    id = v.Id,
+                    sku = v.SKU,
+                    price = v.Price,
+                    stockQuantity = v.StockQuantity,
+                    color = v.Color,
+                    capacity = v.Capacity,
 
-                    Images = v.Images.Select(i => new VariantImageDto
+                    images = v.Images.Select(i => new 
                     {
-                        Id = i.Id,
-                        ImageUrl = i.ImageUrl,
-                        IsMain = i.IsMain
+                        id = i.Id,
+                        imageUrl = i.ImageUrl,
+                        isMain = i.IsMain
                     }).ToList()
                 }).ToList(),
 
-                Specifications = product.TechnicalSpecifications.Select(s => new TechnicalSpecDto // Map TechnicalSpecifications
+                specifications = product.TechnicalSpecifications.Select(s => new 
                 {
-                    SpecName = s.SpecName,
-                    SpecValue = s.SpecValue
+                    id = s.Id,
+                    key = s.SpecName,     // App cần tên biến là "key"
+                    value = s.SpecValue   // App cần tên biến là "value"
                 }).ToList()
             };
 
@@ -201,109 +210,160 @@ namespace WebApplication1.Controllers
         [HttpDelete("{id}")]
         public async Task<IActionResult> Delete(int id)
         {
+            // 1. Tải sản phẩm và tất cả dữ liệu con liên quan
             var product = await _context.Products
                 .Include(p => p.ProductVariants)
-                .ThenInclude(v => v.Images)
+                    .ThenInclude(v => v.Images)
+                .Include(p => p.TechnicalSpecifications)
                 .FirstOrDefaultAsync(p => p.Id == id);
 
             if (product == null)
-                return NotFound();
+                return NotFound("Sản phẩm không tồn tại.");
 
-            _context.Products.Remove(product);
-            await _context.SaveChangesAsync();
+            // 2. Kiểm tra xem sản phẩm có trong đơn hàng nào không
+            var variantIds = product.ProductVariants.Select(v => v.Id).ToList();
+            var isProductInAnyOrder = await _context.OrderDetails
+                .AnyAsync(od => variantIds.Contains(od.ProductVariantId));
 
-            return Ok("Xóa sản phẩm thành công.");
+            if (isProductInAnyOrder)
+            {
+                return BadRequest("Không thể xóa sản phẩm này vì đã có trong một hoặc nhiều đơn hàng đã đặt.");
+            }
+
+            // 3. Nếu không có ràng buộc, tiến hành xóa
+            try
+            {
+                var imagesToDelete = product.ProductVariants.SelectMany(v => v.Images).ToList();
+
+                // Xóa các bản ghi trong DB theo thứ tự: con -> cha
+                if (imagesToDelete.Any()) _context.Images.RemoveRange(imagesToDelete);
+                if (product.TechnicalSpecifications.Any()) _context.TechnicalSpecifications.RemoveRange(product.TechnicalSpecifications);
+                if (product.ProductVariants.Any()) _context.ProductVariants.RemoveRange(product.ProductVariants);
+                _context.Products.Remove(product);
+
+                await _context.SaveChangesAsync(); // Lưu thay đổi vào DB
+
+                // 4. Sau khi DB xóa thành công, tiến hành xóa file vật lý trên server
+                foreach (var image in imagesToDelete)
+                {
+                    try
+                    {
+                        var fileName = Path.GetFileName(new Uri(image.ImageUrl).AbsolutePath);
+                        var filePath = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "images", fileName);
+                        if (System.IO.File.Exists(filePath))
+                        {
+                            System.IO.File.Delete(filePath);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        // Ghi log lỗi xóa file nhưng không dừng tiến trình
+                        Console.WriteLine($"Lỗi không thể xóa file {image.ImageUrl}: {ex.Message}");
+                    }
+                }
+
+                return Ok("Xóa sản phẩm thành công.");
+            }
+            catch (DbUpdateException ex)
+            {
+                return StatusCode(500, $"Lỗi cơ sở dữ liệu khi xóa sản phẩm: {ex.InnerException?.Message ?? ex.Message}");
+            }
         }
 
         // =========================================
         // 6. ADD VARIANT IMAGES
         // =========================================
         [HttpPost("{productId}/variants")]
-public async Task<IActionResult> CreateVariant(int productId, [FromBody] ProductVariantDto dto)
-{
-    var variant = new ProductVariant
-    {
-        ProductId = productId,
-        SKU = dto.SKU ?? $"SKU-{DateTime.Now.Ticks}",
-        Color = dto.Color,
-        Capacity = dto.Capacity ?? "",
-        Price = dto.Price,
-        StockQuantity = dto.StockQuantity 
-    };
-
-    _context.ProductVariants.Add(variant);
-    await _context.SaveChangesAsync();
-
-    // 🔥 thêm ảnh
-    if (dto.Images != null && dto.Images.Any())
-    {
-        bool isFirst = true;
-
-        foreach (var img in dto.Images)
+        public async Task<IActionResult> CreateVariant(int productId, [FromBody] ProductVariantDto dto)
         {
-            _context.Images.Add(new Image
+            try
             {
-                ProductVariantId = variant.Id,
-                ImageUrl = img.ImageUrl,
-                IsMain = img.IsMain || isFirst
-            });
-
-            isFirst = false;
-        }
-
-        await _context.SaveChangesAsync();  
-    }
-
-    return Ok("Tạo variant + ảnh thành công");
-}
-[HttpPut("variant/{id}")]
-public async Task<IActionResult> UpdateVariant(int id, [FromBody] ProductVariantDto dto)
-{
-    try
-    {
-        var variant = await _context.ProductVariants
-            .Include(v => v.Images)
-            .FirstOrDefaultAsync(v => v.Id == id);
-
-        if (variant == null)
-            return NotFound("Biến thể không tồn tại");
-
-        variant.SKU = dto.SKU ?? variant.SKU;
-        variant.Color = dto.Color;
-        variant.Capacity = dto.Capacity ?? "";
-        variant.Price = dto.Price;
-        variant.StockQuantity = dto.StockQuantity;
-
-        // 🔥 XÓA ảnh cũ
-        _context.Images.RemoveRange(variant.Images);
-
-        // 🔥 THÊM lại ảnh mới
-        if (dto.Images != null && dto.Images.Any())
-        {
-            bool isFirst = true;
-
-            foreach (var img in dto.Images)
-            {
-                _context.Images.Add(new Image
+                var variant = new ProductVariant
                 {
-                    ProductVariantId = variant.Id,
-                    ImageUrl = img.ImageUrl,
-                    IsMain = img.IsMain || isFirst
-                });
+                    ProductId = productId,
+                    SKU = string.IsNullOrWhiteSpace(dto.SKU) ? $"SKU-{DateTime.Now.Ticks}" : dto.SKU,
+                    Color = dto.Color ?? "Mặc định",
+                    Capacity = dto.Capacity ?? "",
+                    Price = dto.Price,
+                    StockQuantity = dto.StockQuantity 
+                };
 
-                isFirst = false;
+                _context.ProductVariants.Add(variant);
+                await _context.SaveChangesAsync();
+
+                if (dto.Images != null && dto.Images.Any())
+                {
+                    bool isFirst = true;
+                    foreach (var img in dto.Images)
+                    {
+                        if (!string.IsNullOrEmpty(img.ImageUrl))
+                        {
+                            _context.Images.Add(new Image
+                            {
+                                ProductVariantId = variant.Id,
+                                ImageUrl = img.ImageUrl,
+                                IsMain = img.IsMain || isFirst
+                            });
+                            isFirst = false;
+                        }
+                    }
+                    await _context.SaveChangesAsync();  
+                }
+
+                return Ok(new { message = "Tạo variant + ảnh thành công" });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = $"Lỗi Server: {ex.Message} - {ex.InnerException?.Message}" });
             }
         }
 
-        await _context.SaveChangesAsync();
+        [HttpPut("variant/{id}")]
+        public async Task<IActionResult> UpdateVariant(int id, [FromBody] ProductVariantDto dto)
+        {
+            try
+            {
+                var variant = await _context.ProductVariants
+                    .Include(v => v.Images)
+                    .FirstOrDefaultAsync(v => v.Id == id);
 
-        return Ok("Cập nhật variant + ảnh thành công");
-    }
-    catch
-    {
-        return StatusCode(500, "Lỗi update variant");
-    }
-}
+                if (variant == null)
+                    return NotFound(new { message = "Biến thể không tồn tại" });
+
+                variant.SKU = string.IsNullOrWhiteSpace(dto.SKU) ? variant.SKU : dto.SKU;
+                variant.Color = dto.Color ?? variant.Color;
+                variant.Capacity = dto.Capacity ?? "";
+                variant.Price = dto.Price;
+                variant.StockQuantity = dto.StockQuantity;
+
+                _context.Images.RemoveRange(variant.Images);
+
+                if (dto.Images != null && dto.Images.Any())
+                {
+                    bool isFirst = true;
+                    foreach (var img in dto.Images)
+                    {
+                        if (!string.IsNullOrEmpty(img.ImageUrl))
+                        {
+                            _context.Images.Add(new Image
+                            {
+                                ProductVariantId = variant.Id,
+                                ImageUrl = img.ImageUrl,
+                                IsMain = img.IsMain || isFirst
+                            });
+                            isFirst = false;
+                        }
+                    }
+                }
+
+                await _context.SaveChangesAsync();
+                return Ok(new { message = "Cập nhật variant + ảnh thành công" });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = $"Lỗi Server: {ex.Message} - {ex.InnerException?.Message}" });
+            }
+        }
 [HttpDelete("variant/{id}")]
 public async Task<IActionResult> DeleteVariant(int id)
 {
@@ -321,5 +381,7 @@ public async Task<IActionResult> DeleteVariant(int id)
 
     return Ok("Đã xóa variant + ảnh");
 }
+   
     }
+    
 }

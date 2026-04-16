@@ -26,9 +26,6 @@ namespace WebApplication1.Model
             [MaxLength(50)]
             public string Capacity { get; set; } // Ví dụ: 128GB, 256GB
 
-            [MaxLength(500)]
-            public string ImageUrl { get; set; }
-
             // Navigation properties
             [ForeignKey("ProductId")]
             public Product Product { get; set; }

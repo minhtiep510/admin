@@ -275,3 +275,5 @@ D:\baocao\WebApplication1\WebApplication1\obj\Debug\net8.0\staticwebassets.build
 D:\baocao\WebApplication1\WebApplication1\obj\Debug\net8.0\WebAppli.7D14BD69.Up2Date
 D:\baocao\WebApplication1\WebApplication1\obj\Debug\net8.0\WebApplication1.genruntimeconfig.cache
 D:\baocao\WebApplication1\WebApplication1\obj\Debug\net8.0\ref\WebApplication1.dll
+D:\baocao\WebApplication1\WebApplication1\obj\Debug\net8.0\WebApplication1.sourcelink.json
+D:\baocao\WebApplication1\WebApplication1\bin\Debug\net8.0\WebApplication1.staticwebassets.runtime.json
